@@ -1,79 +1,62 @@
 import os
-from textwrap import dedent
 
 from flask import Flask, jsonify, render_template, request
-from psycopg_pool import ConnectionPool
+from supabase import Client, create_client
 
-DATABASE_URL = os.getenv(
-    "SUPABASE_DB_URL",
-    "postgresql://postgres:Aarush1011@db.kteucjvbatzazvzzkags.supabase.co:5432/postgres",
-)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kteucjvbatzazvzzkags.supabase.co")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_SERVICE_KEY")
+if not SUPABASE_SERVICE_KEY:
+    raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_SERVICE_KEY) must be set")
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=5, open=False)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+TABLE_NAME = "cookie_clicks"
 
 
-def init_db() -> None:
-    pool.open()
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                dedent(
-                    """
-                    create table if not exists cookie_clicks (
-                        player text primary key,
-                        clicks bigint not null default 0,
-                        updated_at timestamptz not null default now()
-                    );
-                    """
-                )
-            )
+def fetch_clicks(player: str) -> int | None:
+    response = (
+        supabase.table(TABLE_NAME)
+        .select("clicks")
+        .eq("player", player)
+        .limit(1)
+        .execute()
+    )
+    rows = response.data or []
+    return int(rows[0]["clicks"]) if rows else None
+
+
+def ensure_player(player: str) -> int:
+    clicks = fetch_clicks(player)
+    if clicks is not None:
+        return clicks
+    supabase.table(TABLE_NAME).insert({"player": player, "clicks": 0}).execute()
+    return 0
+
+
+def persist_clicks(player: str, clicks: int) -> int:
+    supabase.table(TABLE_NAME).upsert({"player": player, "clicks": clicks}).execute()
+    return clicks
 
 
 def get_clicks(player: str) -> int:
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "select clicks from cookie_clicks where player = %s",
-                (player,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                cur.execute(
-                    "insert into cookie_clicks (player, clicks) values (%s, 0) returning clicks",
-                    (player,),
-                )
-                row = cur.fetchone()
-            return int(row[0])
+    return ensure_player(player)
 
 
 def add_clicks(player: str, delta: int) -> int:
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                dedent(
-                    """
-                    insert into cookie_clicks (player, clicks)
-                    values (%s, greatest(%s, 0))
-                    on conflict (player) do update set
-                        clicks = cookie_clicks.clicks + excluded.clicks,
-                        updated_at = now()
-                    returning clicks;
-                    """
-                ),
-                (player, delta),
-            )
-            row = cur.fetchone()
-            return int(row[0])
+    current = ensure_player(player)
+    total = current + delta
+    return persist_clicks(player, total)
 
 
 app = Flask(__name__)
-init_db()
 
 
 @app.get("/api/clicks")
 def clicks_get():
     player = request.args.get("player", "default").strip() or "default"
-    total = get_clicks(player)
+    try:
+        total = get_clicks(player)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
     return jsonify({"player": player, "clicks": total})
 
 
@@ -88,7 +71,10 @@ def clicks_post():
         return jsonify({"error": "delta must be an integer"}), 400
     if delta <= 0:
         return jsonify({"error": "delta must be positive"}), 400
-    total = add_clicks(player, delta)
+    try:
+        total = add_clicks(player, delta)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
     return jsonify({"player": player, "clicks": total})
 
 
