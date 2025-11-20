@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cookie Clicker (Supabase + Flask)</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; }
+      button { padding: 1rem 2rem; font-size: 1.25rem; }
+      input { padding: 0.5rem; margin-right: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Cookie Clicker</h1>
+    <p>Enter a player name (or stay with the shared default) and start clicking.</p>
+    <div>
+      <input id="player" placeholder="Player name" />
+      <button id="load">Load</button>
+    </div>
+    <p>Clicks: <strong id="count">0</strong></p>
+    <button id="click">+1 Cookie</button>
+    <script>
+      const countEl = document.getElementById('count');
+      const playerEl = document.getElementById('player');
+      const loadBtn = document.getElementById('load');
+      const clickBtn = document.getElementById('click');
+      async function fetchCount() {
+        const player = encodeURIComponent(playerEl.value.trim() || 'default');
+        const res = await fetch(`/api/clicks?player=${player}`);
+        const data = await res.json();
+        countEl.textContent = data.clicks;
+      }
+      async function increment() {
+        const player = playerEl.value.trim() || 'default';
+        const res = await fetch('/api/clicks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player, delta: 1 })
+        });
+        const data = await res.json();
+        if (data.clicks !== undefined) {
+          countEl.textContent = data.clicks;
+        } else if (data.error) {
+          alert(data.error);
+        }
+      }
+      loadBtn.addEventListener('click', fetchCount);
+      clickBtn.addEventListener('click', increment);
+      fetchCount();
+    </script>
+  </body>
+</html>
